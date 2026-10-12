@@ -1,0 +1,16 @@
+{
+  "name": "ripcord-keeper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Keeper bot for the Ripcord executor on Elysium",
+  "scripts": {
+    "start": "node keeper.mjs",
+    "test": "node --test decide.test.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "viem": "^2.21.0"
+  }
+}
