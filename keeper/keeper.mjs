@@ -32,7 +32,7 @@ let PRIVATE_KEY = need('KEEPER_PRIVATE_KEY').trim();
 if (!PRIVATE_KEY.startsWith('0x')) PRIVATE_KEY = `0x${PRIVATE_KEY}`;
 const START_BLOCK = BigInt(process.env.START_BLOCK || '6000000');
 const POLL_MS = Number(process.env.POLL_MS || 1000);
-const SYNC_MS = Number(process.env.SYNC_MS || 4000);
+const SYNC_MS = Number(process.env.SYNC_MS || 8000);
 const PRIORITY_GWEI = process.env.PRIORITY_GWEI || '1';
 const PORT = Number(process.env.PORT || 8080);
 // FAST mode skips the pre-flight simulation and fixes the gas limit, so an exit needs only two network
@@ -70,8 +70,9 @@ const chain = defineChain({
 });
 
 const account = privateKeyToAccount(PRIVATE_KEY);
-const publicClient = createPublicClient({ chain, transport: viemHttp(RPC_URL) });
-const walletClient = createWalletClient({ account, chain, transport: viemHttp(RPC_URL) });
+const transport = viemHttp(RPC_URL, { retryCount: 2, retryDelay: 1500, timeout: 15_000 });
+const publicClient = createPublicClient({ chain, transport });
+const walletClient = createWalletClient({ account, chain, transport });
 
 // ------------------------------------------------------------------ logging
 
@@ -87,8 +88,12 @@ function log(event, data = {}) {
 
 function why(e) {
   const name = e?.cause?.data?.errorName || e?.data?.errorName;
-  const msg = name || e?.shortMessage || e?.message || String(e);
-  return String(msg).slice(0, 300);
+  if (name) return String(name).slice(0, 300);
+  const bits = [e?.shortMessage || e?.message || String(e)];
+  if (e?.status) bits.push(`HTTP ${e.status}`);
+  const details = e?.details || e?.cause?.details;
+  if (details) bits.push(String(details));
+  return bits.join(' | ').slice(0, 300);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -152,12 +157,15 @@ async function refreshGasPrice() {
   cachedGasPrice = await publicClient.getGasPrice();
 }
 async function gasPriceLoop() {
+  let delay = 15_000;
   for (;;) {
-    await sleep(2000);
+    await sleep(delay);
     try {
       await refreshGasPrice();
+      delay = 15_000;
     } catch (e) {
       log('gas_price_error', { reason: why(e) });
+      delay = Math.min(delay * 2, 60_000);
     }
   }
 }
@@ -174,6 +182,7 @@ function sendFast(functionName, id) {
   return locked(async () => {
     const data = encodeFunctionData({ abi, functionName, args: [id] });
     const priority = parseGwei(PRIORITY_GWEI);
+    if (cachedGasPrice === 0n) await refreshGasPrice();
     const onChain = await publicClient.getTransactionCount({ address: account.address, blockTag: 'pending' });
     const nonce = nextNonce !== undefined && nextNonce > onChain ? nextNonce : onChain;
     const signed = await account.signTransaction({
@@ -345,13 +354,16 @@ async function pollLoop() {
 }
 
 async function syncLoop() {
+  let delay = SYNC_MS;
   for (;;) {
     try {
       await syncOrders();
+      delay = SYNC_MS;
     } catch (e) {
       log('sync_error', { reason: why(e) });
+      delay = Math.min(delay * 2, 60_000);
     }
-    await sleep(SYNC_MS);
+    await sleep(delay);
   }
 }
 
@@ -364,7 +376,7 @@ async function balanceLoop() {
     } catch (e) {
       log('balance_error', { reason: why(e) });
     }
-    await sleep(60_000);
+    await sleep(300_000);
   }
 }
 
