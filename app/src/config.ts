@@ -4,8 +4,8 @@ export const RPC_URL: string = import.meta.env.VITE_RPC_URL ?? 'https://testnet-
 export const KEEPER_URL: string = import.meta.env.VITE_KEEPER_URL ?? 'https://ripcord-53y7.onrender.com';
 export const PRIVY_APP_ID: string = import.meta.env.VITE_PRIVY_APP_ID ?? '';
 export const FAUCET_URL = 'https://elysium.kinetiq.xyz/testnet-faucet';
-export const EXECUTOR_START_BLOCK = BigInt(import.meta.env.VITE_EXECUTOR_START_BLOCK ?? '6400000');
-export const HOOK_START_BLOCK = BigInt(import.meta.env.VITE_HOOK_START_BLOCK ?? '3500000');
+export const EXECUTOR_START_BLOCK = BigInt(import.meta.env.VITE_EXECUTOR_START_BLOCK ?? '11100000');
+export const HOOK_START_BLOCK = BigInt(import.meta.env.VITE_HOOK_START_BLOCK ?? '9648800');
 
 export const elysiumTestnet = defineChain({
   id: 99801,
@@ -20,9 +20,9 @@ export const elysiumTestnet = defineChain({
 });
 
 export const ADDR = {
-  hook: '0xE2f6254508DEB93Da081837F545e0bAF7b00d8E9',
-  executor: '0x1F7b9eB8e0f8DBdD5Ad3215cc2776D41E931995d',
-  usdc: '0x4b4fb5C5794F0c821464956374cC5872D5F0f140',
+  hook: '0x6d01f6644bbf1b5074472D3e85aa1465B4d2bF3d',
+  executor: '0x484804031B174B67Efa9A380Dde948bd7627e8Fb',
+  usdc: '0x84Cc00D13173f7016Bbab22A736dBf75A154cFE2',
 } as const;
 
 export const ROUTER = '0x90332b0ecbb2c9517f405627b0dd5d5265246563' as const; // Ascend's UniversalRouter

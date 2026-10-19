@@ -10,8 +10,8 @@ import {
   type Meta,
 } from './data';
 
-const LAUNCH_KEY = 'ripcord.launches.v2';
-const META_KEY = 'ripcord.meta.v2';
+const LAUNCH_KEY = 'ripcord.launches.v3';
+const META_KEY = 'ripcord.meta.v3';
 const REORG_BUFFER = 20n;
 const PAGE = 12;
 
