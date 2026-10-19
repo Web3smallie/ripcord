@@ -153,7 +153,7 @@ export function App() {
           rules are met.
         </p>
         <p className="muted small">
-          Elysium testnet · executor{' '}
+          Elysium testnet · Executor{' '}
           <a className="link" href={explorerAddress(ADDR.executor)} target="_blank" rel="noreferrer">
             {shortAddr(ADDR.executor)}
           </a>
