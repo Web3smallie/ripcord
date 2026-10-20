@@ -206,7 +206,8 @@ npm run dev
 - **Trailing Stop-Loss: Adjust exit thresholds as prices rise.
 - **Social Login Integration:** Embedded wallets via Privy (X, Telegram, github).
 - **Top Holder Watch UI:** Visual whale tracking modal and custom wallet list inputs.
-- **Telegram & Email Alerts:** Real-time push notifications when orders arm or execute.
+- **Telegram bot.** First, exit alerts sent to your chat the moment a rule triggers. Then buying, selling and protecting from Telegram, built on non-custodial wallets so Ripcord never holds your keys.
+- **Email Alerts:** Real-time push notifications when orders arm or execute.
 - **Take-Profit Ladders:** Automated partial profit taking (e.g., sell 25% at 2x, 50% at 5x).
 - **External Security Audit:** Third-party smart contract audit prior to Mainnet launch.
 
