@@ -4,6 +4,8 @@ export const launchedEvent = parseAbiItem(
   'event Launched(bytes32 indexed poolId, address indexed token, address indexed creator, address quote, uint256 supplySeeded, uint256 devBuyTokens)'
 );
 
+export const transferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
+
 export const erc20Abi = parseAbi([
   'function name() view returns (string)',
   'function symbol() view returns (string)',
