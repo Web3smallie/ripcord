@@ -1,5 +1,6 @@
-import type { Address } from 'viem';
-import { transferEvent } from './abi';
+import { parseAbi, type Address } from 'viem';
+import { executorAbi, transferEvent } from './abi';
+import { ADDR } from './config';
 import { publicClient } from './data';
 
 /** One ERC-20 Transfer, reduced to what the balance maths needs. */
@@ -94,5 +95,105 @@ export async function fetchTransfers(
     }
     start = end + 1n;
   }
+  return out;
+}
+
+/** What the chain itself says at one block, to compare against the replayed history. */
+export type ChainFacts = {
+  /** The block every value below was read at. Must be the last block the history scan covered. */
+  block: bigint;
+  /** totalSupply() of the token. */
+  totalSupply: bigint;
+  /** The pool manager's vault, which holds the pool's unsold tokens. */
+  vault: Address;
+  /** balanceOf at `block` for every address that will be shown, including the vault. */
+  balances: Map<string, bigint>;
+};
+
+export type Integrity = { ok: boolean; problems: string[] };
+
+/**
+ * Decides whether the replayed history can be trusted. Any problem means the Radar must show
+ * "Data incomplete" and hide every figure, because a number built on missing history looks
+ * exactly as confident as a correct one.
+ */
+export function checkIntegrity(rec: Reconstruction, facts: ChainFacts, scannedTo: bigint): Integrity {
+  const problems: string[] = [];
+  if (facts.block !== scannedTo) {
+    problems.push(`chain values were read at block ${facts.block} but history ends at block ${scannedTo}`);
+  }
+  if (rec.negative.length > 0) {
+    problems.push(`${rec.negative.length} address(es) replay below zero, so some history is missing`);
+  }
+  if (rec.supply !== facts.totalSupply) {
+    problems.push(`replayed supply ${rec.supply} does not equal totalSupply() ${facts.totalSupply}`);
+  }
+  const onChain = new Map<string, bigint>();
+  for (const [addr, bal] of facts.balances) onChain.set(addr.toLowerCase(), bal);
+  if (!onChain.has(facts.vault.toLowerCase())) {
+    problems.push('the pool vault balance was not read');
+  }
+  for (const [addr, bal] of onChain) {
+    const replayed = rec.balances.get(addr) ?? 0n;
+    if (replayed !== bal) problems.push(`${addr}: replayed ${replayed} but balanceOf is ${bal}`);
+  }
+  return { ok: problems.length === 0, problems };
+}
+
+const radarAbi = parseAbi([
+  'function totalSupply() view returns (uint256)',
+  'function balanceOf(address) view returns (uint256)',
+]);
+const vaultAbi = parseAbi(['function vault() view returns (address)']);
+
+/**
+ * Reads, at one fixed block: the token's totalSupply, the pool vault, and balanceOf for the vault and every
+ * address in `holders`. Throws if any read fails, so a partial answer is never mistaken for a complete one.
+ */
+export async function readChainFacts(
+  token: Address,
+  block: bigint,
+  holders: Address[],
+  client: typeof publicClient = publicClient
+): Promise<ChainFacts> {
+  const [key] = await client.readContract({
+    address: ADDR.executor,
+    abi: executorAbi,
+    functionName: 'poolFor',
+    args: [token],
+    blockNumber: block,
+  });
+  const vault = await client.readContract({
+    address: key.poolManager,
+    abi: vaultAbi,
+    functionName: 'vault',
+    blockNumber: block,
+  });
+  const totalSupply = await client.readContract({
+    address: token,
+    abi: radarAbi,
+    functionName: 'totalSupply',
+    blockNumber: block,
+  });
+  const wanted = [...new Set([vault, ...holders].map((a) => a.toLowerCase()))] as Address[];
+  const results = await client.multicall({
+    allowFailure: false,
+    blockNumber: block,
+    contracts: wanted.map((a) => ({ address: token, abi: radarAbi, functionName: 'balanceOf' as const, args: [a] as const })),
+  });
+  const balances = new Map<string, bigint>();
+  wanted.forEach((a, i) => balances.set(a, results[i]));
+  return { block, totalSupply, vault, balances };
+}
+
+/** For each address: true if it has code (a contract), false if it is a plain wallet. Throws on any failed read. */
+export async function readContractFlags(
+  addrs: Address[],
+  block: bigint,
+  client: typeof publicClient = publicClient
+): Promise<Map<string, boolean>> {
+  const codes = await Promise.all(addrs.map((a) => client.getCode({ address: a, blockNumber: block })));
+  const out = new Map<string, boolean>();
+  addrs.forEach((a, i) => out.set(a.toLowerCase(), codes[i] !== undefined && codes[i] !== '0x'));
   return out;
 }
