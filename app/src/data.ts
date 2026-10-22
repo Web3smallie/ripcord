@@ -1,5 +1,5 @@
 import { createPublicClient, getAddress, http, isAddress, type Address, type Hex } from 'viem';
-import { ADDR, RPC_URL, elysiumTestnet } from './config';
+import { ADDR, HOOK_START_BLOCK, RPC_URL, elysiumTestnet } from './config';
 import { erc20Abi, executorAbi, hookAbi, launchedEvent } from './abi';
 
 // The public RPC rate-limits, so: retry with back-off, batch reads through Multicall3,
@@ -9,7 +9,14 @@ export const publicClient = createPublicClient({
   transport: http(RPC_URL, { batch: true, retryCount: 5, retryDelay: 600 }),
 });
 
-export type Launch = { token: Address; poolId: Hex; creator: Address; block: bigint };
+export type Launch = {
+  token: Address;
+  poolId: Hex;
+  creator: Address;
+  block: bigint; // launch block (0n when unknown)
+  supplySeeded: bigint; // tokens placed in the pool at launch
+  devBuyTokens: bigint; // tokens the creator bought in the launch transaction
+};
 export type Meta = { name: string; symbol: string };
 
 type CallResult = { status: 'success'; result: unknown } | { status: 'failure'; error: Error };
@@ -35,7 +42,14 @@ export async function scanLaunches(from: bigint): Promise<{ launches: Launch[]; 
     );
     for (const logs of results) {
       for (const l of logs) {
-        launches.push({ token: l.args.token!, poolId: l.args.poolId!, creator: l.args.creator!, block: l.blockNumber });
+        launches.push({
+          token: l.args.token!,
+          poolId: l.args.poolId!,
+          creator: l.args.creator!,
+          block: l.blockNumber,
+          supplySeeded: l.args.supplySeeded!,
+          devBuyTokens: l.args.devBuyTokens!,
+        });
       }
     }
     if (i + PARALLEL < ranges.length) await sleep(250);
@@ -122,7 +136,30 @@ export async function lookupToken(raw: string): Promise<Launch | null> {
       functionName: 'poolCreator',
       args: [poolId],
     });
-    return { token, poolId, creator, block: 0n };
+    // the launch event is indexed by token, so one filtered query finds the launch block and dev buy
+    try {
+      const logs = await publicClient.getLogs({
+        address: ADDR.hook,
+        event: launchedEvent,
+        args: { token },
+        fromBlock: HOOK_START_BLOCK,
+        toBlock: 'latest',
+      });
+      const l = logs[0];
+      if (l) {
+        return {
+          token,
+          poolId,
+          creator,
+          block: l.blockNumber,
+          supplySeeded: l.args.supplySeeded!,
+          devBuyTokens: l.args.devBuyTokens!,
+        };
+      }
+    } catch {
+      // keep going: the token is still valid, its launch details are just unknown
+    }
+    return { token, poolId, creator, block: 0n, supplySeeded: 0n, devBuyTokens: 0n };
   } catch {
     return null;
   }

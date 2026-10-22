@@ -10,19 +10,34 @@ import {
   type Meta,
 } from './data';
 
-const LAUNCH_KEY = 'ripcord.launches.v3';
+const LAUNCH_KEY = 'ripcord.launches.v4';
 const META_KEY = 'ripcord.meta.v3';
 const REORG_BUFFER = 20n;
 const PAGE = 12;
 
-type StoredLaunch = { token: Launch['token']; poolId: Launch['poolId']; creator: Launch['creator']; block: string };
+type StoredLaunch = {
+  token: Launch['token'];
+  poolId: Launch['poolId'];
+  creator: Launch['creator'];
+  block: string;
+  supplySeeded: string;
+  devBuyTokens: string;
+};
 
 function loadLaunches(): { scannedTo: bigint; launches: Launch[] } {
   try {
     const raw = localStorage.getItem(LAUNCH_KEY);
     if (raw) {
       const s = JSON.parse(raw) as { scannedTo: string; launches: StoredLaunch[] };
-      return { scannedTo: BigInt(s.scannedTo), launches: s.launches.map((l) => ({ ...l, block: BigInt(l.block) })) };
+      return {
+        scannedTo: BigInt(s.scannedTo),
+        launches: s.launches.map((l) => ({
+          ...l,
+          block: BigInt(l.block),
+          supplySeeded: BigInt(l.supplySeeded),
+          devBuyTokens: BigInt(l.devBuyTokens),
+        })),
+      };
     }
   } catch {
     // fall through to a fresh start
@@ -34,7 +49,15 @@ function saveLaunches(scannedTo: bigint, launches: Launch[]) {
   try {
     localStorage.setItem(
       LAUNCH_KEY,
-      JSON.stringify({ scannedTo: scannedTo.toString(), launches: launches.map((l) => ({ ...l, block: l.block.toString() })) })
+      JSON.stringify({
+        scannedTo: scannedTo.toString(),
+        launches: launches.map((l) => ({
+          ...l,
+          block: l.block.toString(),
+          supplySeeded: l.supplySeeded.toString(),
+          devBuyTokens: l.devBuyTokens.toString(),
+        })),
+      })
     );
   } catch {
     // storage unavailable: rebuilt next time
