@@ -128,3 +128,15 @@ h2 { font-size: 18px; margin: 12px 0; }
 .row .search { margin: 0; }
 .confirm { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #0f1420; }
 select.search { appearance: auto; }
+
+/* Ripcord Radar */
+.card-actions { display: flex; gap: 8px; }
+.card-actions .btn-block { flex: 1; width: auto; }
+.radar { max-width: 460px; max-height: 88vh; max-height: 88dvh; }
+.radar-sub { margin: 0 0 10px; }
+.radar-foot { margin: 14px 0 0; }
+.radar-facts { display: grid; gap: 10px; margin: 10px 0; }
+.radar-facts > div { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.radar-facts > div > span:last-child { text-align: right; }
+.skeleton { height: 14px; border-radius: 6px; background: var(--line); margin: 10px 0; animation: radar-pulse 1.2s ease-in-out infinite; }
+@keyframes radar-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }

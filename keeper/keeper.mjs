@@ -15,7 +15,16 @@ import {
   formatEther,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { decideAction, backoffElapsed } from './decide.mjs';
+import {
+  decideAction,
+  classifyFailure,
+  extractErrorName,
+  recordFailure,
+  clearedSendState,
+  readBackoffMs,
+  sendGated,
+  readGated,
+} from './decide.mjs';
 
 // ------------------------------------------------------------------ config
 
@@ -42,7 +51,6 @@ const GAS_LIMIT = BigInt(process.env.GAS_LIMIT || '1500000');
 const RECEIPT_POLL_MS = Number(process.env.RECEIPT_POLL_MS || 200);
 
 const ARM_COOLDOWN_MS = 11_000; // the contract's arm window is 10 s
-const RETRY_MS = 15_000; // wait this long before retrying an order whose execution would revert
 const LOG_KEEP = 300;
 const LOG_CHUNK = 199_999n; // blocks per getLogs request
 const REORG_BUFFER = 20n;
@@ -54,12 +62,27 @@ const orderCreatedEvent = parseAbiItem(
   'event OrderCreated(uint256 indexed id, address indexed owner, address indexed token, uint128 amount, uint160 entrySqrt, uint160 stopSqrt, address creator, uint128 creatorFloor, uint40 expiry, uint16 slippageBps)'
 );
 
+// Custom errors must be in the ABI so viem decodes errorName on simulation failures;
+// failure classification depends on it. Names mirror the executor contract exactly.
 const abi = parseAbi([
   'event OrderCreated(uint256 indexed id, address indexed owner, address indexed token, uint128 amount, uint160 entrySqrt, uint160 stopSqrt, address creator, uint128 creatorFloor, uint40 expiry, uint16 slippageBps)',
   'event Executed(uint256 indexed id, address indexed owner, uint8 trigger, uint256 tokensSold, uint256 quoteReceived, uint256 feePaid, uint160 sqrtPriceAtExit)',
   'function checkOrder(uint256 id) view returns (bool active, bool stopHit, bool creatorTripped, bool armedReady, bool holdersTripped)',
   'function arm(uint256 id)',
   'function execute(uint256 id) returns (uint256 received)',
+  'error NotOwner()',
+  'error Paused()',
+  'error Reentrant()',
+  'error UnknownPool()',
+  'error BadParams()',
+  'error OrderTooLarge()',
+  'error NotActive()',
+  'error Expired()',
+  'error NotTriggered()',
+  'error NothingToSell()',
+  'error NotArmable()',
+  'error SlippageExceeded()',
+  'error TransferFailed()',
 ]);
 
 const chain = defineChain({
@@ -100,7 +123,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ------------------------------------------------------------------ state
 
-const orders = new Map(); // id (bigint) -> { id, owner, token, lastArmMs, lastFailMs, inflight }
+const orders = new Map(); // id (bigint) -> { id, owner, token, lastArmMs, lastFailMs, sendBackoffMs, unfillableStreak, lastClass, simGate, lastReadFailMs, readBackoffMs, inflight }
 const closed = new Set(); // ids we already saw finish
 let lastSynced = START_BLOCK - 1n;
 let lastTickAt = 0;
@@ -130,6 +153,12 @@ async function syncOrders() {
         token: l.args.token,
         lastArmMs: 0,
         lastFailMs: 0,
+        sendBackoffMs: 0,
+        unfillableStreak: 0,
+        lastClass: null,
+        simGate: true, // first attempt always simulates (restart rule: never open with a paid blind send)
+        lastReadFailMs: 0,
+        readBackoffMs: 0,
         inflight: false,
       });
       log('order_tracked', { id, owner: l.args.owner, token: l.args.token, block: l.blockNumber });
@@ -141,6 +170,7 @@ async function syncOrders() {
 
 // ------------------------------------------------------------------ sending transactions
 
+// Note: every submit() call site must go through locked(); see sendTx and the sim-gated send.
 async function submit(request) {
   const gasPrice = await publicClient.getGasPrice();
   const priority = parseGwei(PRIORITY_GWEI);
@@ -207,14 +237,40 @@ function sendFast(functionName, id) {
   });
 }
 
-// After a failure, find out why (runs off the critical path).
+// After a failure, find out why. Returns what the simulation says so the caller can
+// classify the failure; a simulation that throws without a decoded error name is
+// inconclusive and must be treated as transient, never escalated.
 async function diagnose(functionName, id) {
   try {
     await publicClient.simulateContract({ address: EXECUTOR, abi, functionName, args: [id], account });
     log('diagnose', { id, functionName, result: 'would succeed now (probably lost a race or conditions changed)' });
+    return { outcome: 'succeeds', errorName: null };
   } catch (e) {
-    log('diagnose', { id, functionName, result: why(e) });
+    const errorName = extractErrorName(e);
+    log('diagnose', { id, functionName, result: errorName || why(e) });
+    return { outcome: errorName ? 'reverted' : 'unknown', errorName };
   }
+}
+
+// Records a send failure: classifies it, sets the tiered backoff, and gates the next
+// attempt behind a simulation.
+function noteSendFailure(o, classification) {
+  const next = recordFailure(o.unfillableStreak, classification);
+  o.unfillableStreak = next.streak;
+  o.sendBackoffMs = next.backoffMs;
+  o.lastClass = next.lastClass;
+  o.simGate = next.simGate;
+  o.lastFailMs = Date.now();
+}
+
+// Clears failure state on proof of executability (a passing simulation or receipt).
+function noteExecutable(o) {
+  const cleared = clearedSendState();
+  o.unfillableStreak = cleared.streak;
+  o.sendBackoffMs = cleared.backoffMs;
+  o.lastClass = cleared.lastClass;
+  o.simGate = cleared.simGate;
+  o.lastFailMs = 0;
 }
 
 async function sendTx(functionName, o) {
@@ -226,7 +282,7 @@ async function sendTx(functionName, o) {
     args: [o.id],
     account,
   });
-  return submit(request);
+  return locked(() => submit(request));
 }
 
 async function sendArm(o, decision, detectedAt) {
@@ -247,7 +303,7 @@ async function sendArm(o, decision, detectedAt) {
     });
     if (receipt.status !== 'success') diagnose('arm', o.id);
   } catch (e) {
-    o.lastFailMs = Date.now();
+    noteSendFailure(o, 'transient');
     log('arm_error', { id: o.id, reason: why(e) });
     diagnose('arm', o.id);
   }
@@ -255,22 +311,96 @@ async function sendArm(o, decision, detectedAt) {
 
 async function sendExecute(o, decision, detectedAt) {
   log('trigger_detected', { id: o.id, trigger: decision.trigger, next: 'execute' });
-  try {
-    const hash = await sendTx('execute', o);
-    log('execute_sent', { id: o.id, trigger: decision.trigger, hash, msSinceDetect: Date.now() - detectedAt });
+  let hash;
+  let simGatedSend = false;
 
-    const receipt = await publicClient.waitForTransactionReceipt({
+  if (o.simGate && FAST) {
+    // Simulation gate: after any failure (and always for the first attempt), prove the
+    // order is executable before paying for a transaction. Slow mode already simulates
+    // inside sendTx, so it needs no second simulation here.
+    let request;
+    try {
+      ({ request } = await publicClient.simulateContract({
+        address: EXECUTOR,
+        abi,
+        functionName: 'execute',
+        args: [o.id],
+        account,
+      }));
+    } catch (e) {
+      noteSendFailure(o, classifyFailure(extractErrorName(e)));
+      log('execute_sim_reverted', { id: o.id, trigger: decision.trigger, class: o.lastClass, reason: why(e) });
+      return;
+    }
+    noteExecutable(o); // a passing simulation proves executability: clear failure state
+    simGatedSend = true;
+    try {
+      hash = await locked(() => submit(request));
+    } catch (e) {
+      noteSendFailure(o, 'transient'); // send-side failure after a passing simulation
+      log('execute_error', { id: o.id, trigger: decision.trigger, reason: why(e) });
+      return;
+    }
+    log('execute_sent', { id: o.id, trigger: decision.trigger, hash, msSinceDetect: Date.now() - detectedAt });
+  } else {
+    try {
+      hash = await sendTx('execute', o);
+    } catch (e) {
+      // Slow mode already simulated, so its throw carries the answer; FAST mode sends
+      // blind, so diagnose to learn whether the order itself is unfillable.
+      const name = !FAST ? extractErrorName(e) : null;
+      if (name) {
+        noteSendFailure(o, classifyFailure(name));
+      } else if (!FAST) {
+        noteSendFailure(o, 'transient');
+      } else {
+        const d = await diagnose('execute', o.id);
+        if (d.outcome === 'succeeds') {
+          noteExecutable(o);
+          noteSendFailure(o, 'transient');
+        } else {
+          noteSendFailure(o, classifyFailure(d.errorName));
+        }
+      }
+      log('execute_error', { id: o.id, trigger: decision.trigger, reason: why(e) });
+      return;
+    }
+    log('execute_sent', { id: o.id, trigger: decision.trigger, hash, msSinceDetect: Date.now() - detectedAt });
+  }
+
+  let receipt;
+  try {
+    receipt = await publicClient.waitForTransactionReceipt({
       hash,
       timeout: 60_000,
       pollingInterval: RECEIPT_POLL_MS,
     });
-    const msTotal = Date.now() - detectedAt;
-    if (receipt.status !== 'success') {
-      o.lastFailMs = Date.now();
-      log('execute_failed', { id: o.id, hash, msSinceDetect: msTotal });
-      diagnose('execute', o.id);
-      return;
+  } catch (e) {
+    // Timeout or RPC failure while waiting: ambiguous, never escalate.
+    noteSendFailure(o, 'transient');
+    log('execute_error', { id: o.id, trigger: decision.trigger, reason: why(e) });
+    return;
+  }
+
+  const msTotal = Date.now() - detectedAt;
+  if (receipt.status !== 'success') {
+    if (simGatedSend) {
+      // The simulation passed but the send reverted: a send race, handled as transient.
+      noteSendFailure(o, 'transient');
+    } else {
+      const d = await diagnose('execute', o.id);
+      if (d.outcome === 'succeeds') {
+        noteExecutable(o);
+        noteSendFailure(o, 'transient');
+      } else {
+        noteSendFailure(o, classifyFailure(d.errorName));
+      }
     }
+    log('execute_failed', { id: o.id, hash, msSinceDetect: msTotal });
+    return;
+  }
+  noteExecutable(o);
+  try {
     const ev = parseEventLogs({ abi, logs: receipt.logs, eventName: 'Executed' }).find((x) => x.args.id === o.id);
     log('executed', {
       id: o.id,
@@ -282,17 +412,17 @@ async function sendExecute(o, decision, detectedAt) {
       msDetectToConfirmed: msTotal,
     });
   } catch (e) {
-    // most often: someone else executed first, nothing to sell, or the exit would miss its minimum output
-    o.lastFailMs = Date.now();
+    // Bookkeeping only: the execution itself already succeeded.
     log('execute_error', { id: o.id, trigger: decision.trigger, reason: why(e) });
-    diagnose('execute', o.id);
   }
 }
 
 // ------------------------------------------------------------------ main loops
 
 async function handleOrder(o) {
-  if (!backoffElapsed(Date.now(), o.lastFailMs, RETRY_MS)) return;
+  // Reads are never gated by send backoff: a backed-off order is still re-read every
+  // poll so cancellation, expiry, or execution drops it promptly.
+  if (readGated(Date.now(), o.lastReadFailMs, o.readBackoffMs)) return;
 
   let status;
   try {
@@ -309,7 +439,11 @@ async function handleOrder(o) {
       armedReady: r[3],
       holdersTripped: r[4],
     };
+    o.lastReadFailMs = 0;
+    o.readBackoffMs = 0;
   } catch (e) {
+    o.lastReadFailMs = Date.now();
+    o.readBackoffMs = readBackoffMs(o.readBackoffMs);
     log('check_failed', { id: o.id, reason: why(e) });
     return;
   }
@@ -327,6 +461,9 @@ async function handleOrder(o) {
     return;
   }
   if (decision.action === 'wait') return;
+
+  // Send gate: tiered failure backoff, checked only after a fresh read.
+  if (sendGated(Date.now(), o.lastFailMs, o.sendBackoffMs)) return;
 
   o.inflight = true;
   const detectedAt = Date.now();
@@ -391,12 +528,22 @@ function startServer() {
       return;
     }
     if (req.url && req.url.startsWith('/status')) {
+      const nowMs = Date.now();
       res.end(
         JSON.stringify({
           keeper: account.address,
           executor: EXECUTOR,
           chainId: CHAIN_ID,
           tracked: [...orders.keys()].map(String),
+          orderState: [...orders.values()].map((o) => ({
+            id: String(o.id),
+            failureClass: o.lastClass,
+            unfillableStreak: o.unfillableStreak,
+            retryInMs: sendGated(nowMs, o.lastFailMs, o.sendBackoffMs)
+              ? Math.max(0, o.lastFailMs + o.sendBackoffMs - nowMs)
+              : 0,
+            simGated: o.simGate,
+          })),
           lastTickAt,
           balanceHype,
           recent: recent.slice(-100),

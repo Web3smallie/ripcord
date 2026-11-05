@@ -4,6 +4,7 @@ import { formatPrice, formatUsd, shortAddr } from './format';
 import { useTokens, type TokenRow } from './useTokens';
 import { useBalances, useWallet } from './wallet';
 import { BuyModal } from './BuyModal';
+import { RadarPanel } from './RadarPanel';
 import { ProtectionsPanel } from './ProtectionsPanel';
 import { WalletPanel } from './WalletPanel';
 import { useHoldings } from './useHoldings';
@@ -89,7 +90,7 @@ function WalletButton({ w, usdc }: { w: WalletState; usdc: number | null }) {
   );
 }
 
-function TokenCard({ t, onBuy }: { t: TokenRow; onBuy: (t: TokenRow) => void }) {
+function TokenCard({ t, onBuy, onRadar }: { t: TokenRow; onBuy: (t: TokenRow) => void; onRadar: (t: TokenRow) => void }) {
   return (
     <div className="card token">
       <div className="token-head">
@@ -112,6 +113,9 @@ function TokenCard({ t, onBuy }: { t: TokenRow; onBuy: (t: TokenRow) => void }) 
       <button className="btn btn-block" onClick={() => onBuy(t)}>
         Buy &amp; Protect
       </button>
+      <button className="btn btn-block btn-ghost" onClick={() => onRadar(t)}>
+        Radar
+      </button>
     </div>
   );
 }
@@ -120,6 +124,7 @@ export function App() {
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<'tokens' | 'mine' | 'wallet'>('tokens');
   const [buying, setBuying] = useState<TokenRow | null>(null);
+  const [radar, setRadar] = useState<TokenRow | null>(null);
   const { launches, rows, total, loading, notice, lookup, canShowMore, showMore } = useTokens(query);
   const w = useWallet();
   const { hype, usdc } = useBalances(w.address);
@@ -221,6 +226,7 @@ export function App() {
                 if (!w.authenticated) w.login();
                 else setBuying(tok);
               }}
+              onRadar={(tok) => setRadar(tok)}
             />
           ))}
         </div>
@@ -236,6 +242,7 @@ export function App() {
       )}
 
       {buying && <BuyModal token={buying} w={w} usdc={usdc} hype={hype} onClose={() => setBuying(null)} />}
+      {radar && <RadarPanel token={radar} onClose={() => setRadar(null)} />}
     </div>
   );
 }

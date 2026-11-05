@@ -137,6 +137,11 @@ export function checkIntegrity(rec: Reconstruction, facts: ChainFacts, scannedTo
     const replayed = rec.balances.get(addr) ?? 0n;
     if (replayed !== bal) problems.push(`${addr}: replayed ${replayed} but balanceOf is ${bal}`);
   }
+  // Reverse direction: every positive replayed balance must have been chain-verified. A missing
+  // incoming transfer deflates an address out of the verified set while supply still matches.
+  for (const [addr, bal] of rec.balances) {
+    if (bal > 0n && !onChain.has(addr)) problems.push(`${addr}: replayed ${bal} but was not chain-verified`);
+  }
   return { ok: problems.length === 0, problems };
 }
 
