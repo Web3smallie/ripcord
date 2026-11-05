@@ -17,18 +17,20 @@ const cache = new Map<string, { at: number; result: RadarResult }>();
 export function useRadar(
   launch: RadarLaunch | null,
   opts: { load?: typeof loadRadar; slowMs?: number } = {}
-): { state: RadarState; slow: boolean; reload: () => void } {
+): { state: RadarState; slow: boolean; reload: () => void; loadedAt: number | null } {
   const load = opts.load ?? loadRadar;
   const slowMs = opts.slowMs ?? SLOW_MS;
   const [state, setState] = useState<RadarState>({ phase: 'loading' });
   const [slow, setSlow] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
 
   useEffect(() => {
     if (!launch) return;
     const hit = cache.get(launch.token);
     if (attempt === 0 && hit && Date.now() - hit.at < TTL_MS) {
       setSlow(false);
+      setLoadedAt(hit.at);
       setState({ phase: 'done', result: hit.result });
       return;
     }
@@ -43,6 +45,7 @@ export function useRadar(
       clearTimeout(timer);
       if (result.status !== 'error') cache.set(launch.token, { at: Date.now(), result });
       setSlow(false);
+      setLoadedAt(Date.now());
       setState({ phase: 'done', result });
     });
     return () => {
@@ -52,5 +55,5 @@ export function useRadar(
   }, [launch?.token, launch?.creator, launch?.block, launch?.devBuyTokens, attempt]);
 
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
-  return { state, slow, reload };
+  return { state, slow, reload, loadedAt };
 }

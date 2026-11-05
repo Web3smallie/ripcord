@@ -1,4 +1,9 @@
+import { useState } from 'react';
+import type { Address } from 'viem';
+import { explorerAddress } from './config';
+import { MAX_WATCH } from './watchlist';
 import { shortAddr } from './format';
+import { summarizeConcentration } from './concentration';
 import type { loadRadar, RadarResult } from './radar';
 import { useRadar } from './useRadar';
 import type { TokenRow } from './useTokens';
@@ -27,13 +32,27 @@ export function RadarLoading({ slow }: { slow: boolean }) {
   );
 }
 
-export function RadarBody({ result, onRetry }: { result: RadarResult; onRetry: () => void }) {
+export function RadarBody({
+  result,
+  onReload,
+  select,
+  loadedAt,
+}: {
+  result: RadarResult;
+  onReload: () => void;
+  select?: {
+    selected: Address[];
+    buyer: string | null;
+    onToggle: (a: Address) => void;
+  };
+  loadedAt: number | null;
+}) {
   if (result.status === 'error') {
     return (
       <div>
         <div className="banner banner-bad">Couldn’t load Radar data.</div>
         <p className="muted small">The chain could not be read just now: {result.message.split('\n')[0]}</p>
-        <button className="btn btn-ghost btn-small" onClick={onRetry}>
+        <button className="btn btn-ghost btn-small" onClick={onReload}>
           Try again
         </button>
       </div>
@@ -53,46 +72,155 @@ export function RadarBody({ result, onRetry }: { result: RadarResult; onRetry: (
             ))}
           </ul>
         </details>
-        <button className="btn btn-ghost btn-small" onClick={onRetry}>
+        <button className="btn btn-ghost btn-small" onClick={onReload}>
           Try again
         </button>
       </div>
     );
   }
-  // Interim summary of verified figures. The ring and holder rows replace this in the next step.
+  const c = summarizeConcentration(result);
   return (
-    <div className="radar-facts">
-      <div>
-        <span className="muted">Total supply</span>
-        <span>{fmtTokens(result.totalSupply)}</span>
+    <div>
+      <div className="ok-head">
+        <p className="muted small">
+          Verified at block {result.block.toString()}
+          {loadedAt !== null ? ` · loaded at ${new Date(loadedAt).toLocaleTimeString()}` : ''}
+        </p>
+        <button className="btn btn-ghost btn-small" onClick={onReload}>
+          Refresh
+        </button>
       </div>
-      <div>
-        <span className="muted">Held by the pool (unsold)</span>
-        <span>{fmtPct(result.poolPctTotal, 2)} of total</span>
+      <div className="radar-facts">
+        <div>
+          <span className="muted">Total supply</span>
+          <span>{fmtTokens(result.totalSupply)}</span>
+        </div>
+        <div>
+          <span className="muted">Held by the pool (unsold)</span>
+          <span>{fmtPct(result.poolPctTotal, 2)} of total</span>
+        </div>
+        <div>
+          <span className="muted">Circulating supply</span>
+          <span>{fmtTokens(result.circulating)}</span>
+        </div>
+        <div>
+          <span className="muted">Creator</span>
+          <span>
+            {result.creator
+              ? `${fmtPct(result.creator.pctCirculating, 1)} of circulating (${fmtPct(result.creator.pctTotal, 2)} of total)`
+              : 'holds no tokens now'}
+          </span>
+        </div>
+        <div>
+          <span className="muted">Dust wallets</span>
+          <span>
+            {result.dust.count} wallets hold {fmtTokens(result.dust.balance)}
+          </span>
+        </div>
       </div>
-      <div>
-        <span className="muted">Circulating supply</span>
-        <span>{fmtTokens(result.circulating)}</span>
-      </div>
-      <div>
-        <span className="muted">Creator</span>
-        <span>
-          {result.creator
-            ? `${fmtPct(result.creator.pctCirculating, 1)} of circulating (${fmtPct(result.creator.pctTotal, 2)} of total)`
-            : 'holds no tokens now'}
-        </span>
-      </div>
-      <div>
-        <span className="muted">Other holders listed</span>
-        <span>{result.holders.length}</span>
-      </div>
+      <a className="muted small link" href={explorerAddress(result.token)} target="_blank" rel="noreferrer">
+        View token contract
+      </a>
+
+      <h4 className="radar-h">Supply distribution</h4>
+      {c.distribution.map((d) => (
+        <div key={d.key} className="dist-row">
+          <div className="dist-top">
+            <span>{d.label}</span>
+            <span className="muted">
+              {fmtTokens(d.balance)} · {fmtPct(d.pctTotal, 2)}
+            </span>
+          </div>
+          <div className="dist-bar">
+            <span style={{ width: `${d.balance > 0n ? Math.max(d.pctTotal, 0.5) : 0}%` }} />
+          </div>
+        </div>
+      ))}
+
+      <h4 className="radar-h">
+        Concentration <span className="pill">provisional thresholds</span>
+      </h4>
+      {c.notes.length === 0 ? (
+        <p className="muted small">No concentration notes under the provisional thresholds.</p>
+      ) : (
+        <ul className="notes">
+          {c.notes.map((n) => (
+            <li key={n.key} className={n.breached ? 'warn' : undefined}>
+              <div>{n.text}</div>
+              <div className="muted small">{n.detail}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="muted small">{c.methodology}</p>
+
+      <h4 className="radar-h">
+        Holder ranking <span className="muted small">verified{select ? ' · tick wallets to watch' : ''}</span>
+      </h4>
+      <ol className="holders">
+        {c.ranked.map((h) => (
+          <li key={h.address} className="holder-row">
+            {select && (
+              <input
+                type="checkbox"
+                checked={select.selected.some((s) => s.toLowerCase() === h.address.toLowerCase())}
+                disabled={
+                  h.isContract ||
+                  (select.buyer !== null && h.address.toLowerCase() === select.buyer.toLowerCase()) ||
+                  (select.selected.length >= MAX_WATCH &&
+                    !select.selected.some((s) => s.toLowerCase() === h.address.toLowerCase()))
+                }
+                onChange={() => select.onToggle(h.address as Address)}
+                aria-label={`Watch ${h.address}`}
+              />
+            )}
+            <span className="muted">#{h.rank}</span>
+            <a className="link" href={explorerAddress(h.address)} target="_blank" rel="noreferrer">
+              {shortAddr(h.address)}
+            </a>
+            {h.isCreator && <span className="pill">creator</span>}
+            {h.isContract && <span className="pill">contract</span>}
+            <span className="holder-bal">
+              {fmtTokens(h.balance)} · {fmtPct(h.pctCirculating, 2)}
+            </span>
+          </li>
+        ))}
+      </ol>
+      {result.moreHolders > 0 && (
+        <p className="muted small">+{result.moreHolders} further holders above dust not shown.</p>
+      )}
     </div>
   );
 }
 
 /** `load` exists so tests can feed the panel fake results. The app never passes it. */
-export function RadarPanel({ token, onClose, load }: { token: TokenRow; onClose: () => void; load?: typeof loadRadar }) {
-  const { state, slow, reload } = useRadar(token, { load });
+export function RadarPanel({
+  token,
+  onClose,
+  onBuy,
+  load,
+  selectMode,
+  initialSelected,
+  buyer,
+  onUseWatch,
+}: {
+  token: TokenRow;
+  onClose: () => void;
+  onBuy: () => void;
+  load?: typeof loadRadar;
+  selectMode?: boolean;
+  initialSelected?: Address[];
+  buyer?: string | null;
+  onUseWatch?: (addrs: Address[]) => void;
+}) {
+  const { state, slow, reload, loadedAt } = useRadar(token, { load });
+  const [selected, setSelected] = useState<Address[]>(initialSelected ?? []);
+  const toggle = (a: Address) =>
+    setSelected((prev) =>
+      prev.some((s) => s.toLowerCase() === a.toLowerCase())
+        ? prev.filter((s) => s.toLowerCase() !== a.toLowerCase())
+        : [...prev, a]
+    );
   const symbol = token.symbol ?? shortAddr(token.token);
   return (
     <div className="overlay" onClick={onClose}>
@@ -107,7 +235,23 @@ export function RadarPanel({ token, onClose, load }: { token: TokenRow; onClose:
           </button>
         </div>
         <p className="muted small radar-sub">On-chain facts, not a prediction.</p>
-        {state.phase === 'loading' ? <RadarLoading slow={slow} /> : <RadarBody result={state.result} onRetry={reload} />}
+        {state.phase === 'loading' ? (
+          <RadarLoading slow={slow} />
+        ) : (
+          <RadarBody
+            result={state.result}
+            onReload={reload}
+            loadedAt={loadedAt}
+            select={selectMode ? { selected, buyer: buyer ?? null, onToggle: toggle } : undefined}
+          />
+        )}
+        <button
+          className="btn btn-block"
+          onClick={selectMode && onUseWatch ? () => onUseWatch(selected) : onBuy}
+          disabled={selectMode === true && selected.length === 0}
+        >
+          {selectMode ? `Use ${selected.length} wallet${selected.length === 1 ? '' : 's'}` : 'Continue to Buy & Protect'}
+        </button>
         <p className="muted small radar-foot">Protection runs only if a rule trips and the swap succeeds. Losses can still happen.</p>
       </div>
     </div>

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import type { Address } from 'viem';
+import { presetForToken } from './watchlist';
 import { ADDR, FAUCET_URL, explorerAddress } from './config';
 import { formatPrice, formatUsd, shortAddr } from './format';
 import { useTokens, type TokenRow } from './useTokens';
@@ -125,6 +127,34 @@ export function App() {
   const [tab, setTab] = useState<'tokens' | 'mine' | 'wallet'>('tokens');
   const [buying, setBuying] = useState<TokenRow | null>(null);
   const [radar, setRadar] = useState<TokenRow | null>(null);
+  const [radarFromBuy, setRadarFromBuy] = useState(false);
+  const [radarSelect, setRadarSelect] = useState(false);
+  const [watchPreset, setWatchPreset] = useState<{ token: Address; addrs: Address[] } | null>(null);
+  const closeRadar = () => {
+    const tok = radar;
+    const back = radarFromBuy;
+    setRadar(null);
+    setRadarFromBuy(false);
+    if (back && tok) setBuying(tok);
+  };
+  const radarToBuy = () => {
+    const tok = radar;
+    setRadar(null);
+    setRadarFromBuy(false);
+    if (!tok) return;
+    if (!w.authenticated) w.login();
+    else setBuying(tok);
+  };
+  const useWatchPreset = (addrs: Address[]) => {
+    const tok = radar;
+    setWatchPreset(tok ? { token: tok.token, addrs } : null);
+    setRadar(null);
+    setRadarFromBuy(false);
+    setRadarSelect(false);
+    if (!tok) return;
+    if (!w.authenticated) w.login();
+    else setBuying(tok);
+  };
   const { launches, rows, total, loading, notice, lookup, canShowMore, showMore } = useTokens(query);
   const w = useWallet();
   const { hype, usdc } = useBalances(w.address);
@@ -226,7 +256,11 @@ export function App() {
                 if (!w.authenticated) w.login();
                 else setBuying(tok);
               }}
-              onRadar={(tok) => setRadar(tok)}
+              onRadar={(tok) => {
+                setRadar(tok);
+                setRadarFromBuy(false);
+                setRadarSelect(false);
+              }}
             />
           ))}
         </div>
@@ -241,8 +275,40 @@ export function App() {
       </section>
       )}
 
-      {buying && <BuyModal token={buying} w={w} usdc={usdc} hype={hype} onClose={() => setBuying(null)} />}
-      {radar && <RadarPanel token={radar} onClose={() => setRadar(null)} />}
+      {/* Kept mounted while Radar is open so the buy form survives the round trip. */}
+      {buying && (
+        <BuyModal
+          token={buying}
+          w={w}
+          usdc={usdc}
+          hype={hype}
+          hidden={radar !== null}
+          onClose={() => setBuying(null)}
+          initialWatch={presetForToken(watchPreset, buying.token)}
+          onSelectWatch={(tok, current) => {
+            setWatchPreset({ token: tok.token, addrs: current });
+            setRadar(tok);
+            setRadarFromBuy(true);
+            setRadarSelect(true);
+          }}
+          onInspect={(tok) => {
+            setRadar(tok);
+            setRadarFromBuy(true);
+            setRadarSelect(false);
+          }}
+        />
+      )}
+      {radar && (
+        <RadarPanel
+          token={radar}
+          onClose={closeRadar}
+          onBuy={radarToBuy}
+          selectMode={radarSelect}
+          initialSelected={presetForToken(watchPreset, radar.token)}
+          buyer={w.address ?? null}
+          onUseWatch={useWatchPreset}
+        />
+      )}
     </div>
   );
 }

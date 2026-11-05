@@ -4,6 +4,7 @@ import { ADDR } from './config';
 import { erc20Abi, executorAbi, executorWriteAbi, hookAbi } from './abi';
 import { publicClient } from './data';
 import { formatTokens, shortAddr } from './format';
+import { sortWatchlist, validateWatchlist } from './watchlist';
 import type { TokenRow } from './useTokens';
 import type { useWallet } from './wallet';
 
@@ -29,18 +30,29 @@ export function BuyModal({
   usdc,
   hype,
   onClose,
+  onInspect,
+  initialWatch,
+  onSelectWatch,
+  hidden,
 }: {
   token: TokenRow;
   w: Wallet;
   usdc: number | null;
   hype: number | null;
   onClose: () => void;
+  onInspect: (t: TokenRow) => void;
+  initialWatch: Address[];
+  onSelectWatch: (t: TokenRow, current: Address[]) => void;
+  hidden: boolean;
 }) {
   const [amount, setAmount] = useState('10');
   const [stopOn, setStopOn] = useState(true);
   const [creatorOn, setCreatorOn] = useState(true);
   const [stopPct, setStopPct] = useState('25');
   const [creatorPct, setCreatorPct] = useState('50');
+  const [holdersOn, setHoldersOn] = useState(initialWatch.length > 0);
+  const [holdersPct, setHoldersPct] = useState('');
+  const [watch, setWatch] = useState<Address[]>(initialWatch);
   const [maxDrop, setMaxDrop] = useState<number | null>(null); // how far this token can fall before it hits its launch price
   const [step, setStep] = useState<Step>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -65,8 +77,11 @@ export function BuyModal({
 
   const stopNum = Number(stopPct);
   const creatorNum = Number(creatorPct);
+  const holdersNum = Number(holdersPct);
   const stopBad = stopOn && !(stopNum >= 1 && stopNum <= 90);
   const creatorBad = creatorOn && !(creatorNum >= 1 && creatorNum <= 95);
+  const holdersBad = holdersOn && !(holdersNum >= 1 && holdersNum <= 95);
+  const watchProblem = holdersOn ? validateWatchlist(watch, w.address ?? null)[0] ?? null : null;
   const stopUseless = stopOn && !stopBad && maxDrop !== null && stopNum > maxDrop;
 
   const amt = Number(amount);
@@ -80,10 +95,11 @@ export function BuyModal({
     : amt > MAX_USDC ? `The test limit is ${MAX_USDC} USDC.`
     : usdc !== null && amt > usdc ? 'You do not have that much USDC.'
     : hype !== null && hype < 0.0005 ? 'You need a little test HYPE for gas.'
-    : !stopOn && !creatorOn ? 'Turn on at least one protection.'
+    : !stopOn && !creatorOn && !holdersOn ? 'Turn on at least one protection.'
     : stopBad ? 'Price stop must be between 1% and 90%.'
     : creatorBad ? 'Creator guard must be between 1% and 95%.'
-    : null;
+    : holdersBad ? 'Holders guard must be between 1% and 95%.'
+    : watchProblem ?? null;
 
   async function run() {
     setError(null);
@@ -136,13 +152,13 @@ export function BuyModal({
             token: token.token,
             stopBps: stopOn ? Math.round(stopNum * 100) : 0,
             creatorSellBps: creatorOn ? Math.round(creatorNum * 100) : 0,
-            holdersSellBps: 0,
+            holdersSellBps: holdersOn ? Math.round(holdersNum * 100) : 0,
             slippageBps: 2000,
             expiry,
           },
           quoteIn,
           minOut,
-          [],
+          holdersOn ? sortWatchlist(watch) : [],
         ],
         gas: 1_000_000n,
       });
@@ -174,7 +190,7 @@ export function BuyModal({
   }
 
   return (
-    <div className="overlay" onClick={() => !busy && onClose()}>
+    <div className="overlay" onClick={() => !busy && onClose()} style={hidden ? { display: 'none' } : undefined}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h3>
@@ -186,10 +202,24 @@ export function BuyModal({
           </button>
         </div>
 
+        <button className="btn btn-ghost btn-small" onClick={() => onInspect(token)} disabled={busy}>
+          Inspect on-chain holders
+        </button>
+
         {step === 'done' ? (
           <div className="done">
             <p className="ok-text">
               Bought {bought !== null ? formatTokens(bought) : ''} {symbol}.
+            </p>
+            <p className="muted small">
+              Rules:{' '}
+              {[
+                stopOn && `stop ${stopNum}%`,
+                creatorOn && `creator ${creatorNum}%`,
+                holdersOn && `holders ${holdersNum}% (${watch.length} wallets)`,
+              ]
+                .filter((x): x is string => x !== false)
+                .join(' · ')}
             </p>
             {needsActivate ? (
               <p className="warn">Protection needs one more tap. Open “My protections” and press Activate.</p>
@@ -243,6 +273,42 @@ export function BuyModal({
               />
               <span>% of their tokens</span>
             </div>
+            <div className="rule">
+              <input type="checkbox" checked={holdersOn} disabled={busy} onChange={(e) => setHoldersOn(e.target.checked)} />
+              <span>Sell if watched wallets sell</span>
+              <input
+                className="pct"
+                inputMode="decimal"
+                value={holdersPct}
+                disabled={busy || !holdersOn}
+                onChange={(e) => setHoldersPct(e.target.value.replace(/[^0-9.]/g, ''))}
+              />
+              <span>% of their combined tokens</span>
+            </div>
+            {holdersOn && !busy && (
+              <div className="muted small">
+                {watch.length === 0 ? (
+                  <span>No wallets selected. </span>
+                ) : (
+                  <span>
+                    Watching {watch.length} wallet{watch.length === 1 ? '' : 's'}:{' '}
+                    {watch
+                      .slice(0, 3)
+                      .map(shortAddr)
+                      .join(', ')}
+                    {watch.length > 3 ? ', …' : ''}{' '}
+                  </span>
+                )}
+                <button className="btn btn-ghost btn-small" onClick={() => onSelectWatch(token, watch)}>
+                  {watch.length === 0 ? 'Select wallets' : 'Change'}
+                </button>{' '}
+                {watch.length > 0 && (
+                  <button className="btn btn-ghost btn-small" onClick={() => setWatch([])}>
+                    Clear
+                  </button>
+                )}
+              </div>
+            )}
 
             {busy && (
               <ol className="steps">

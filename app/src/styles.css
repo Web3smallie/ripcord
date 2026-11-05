@@ -140,3 +140,14 @@ select.search { appearance: auto; }
 .radar-facts > div > span:last-child { text-align: right; }
 .skeleton { height: 14px; border-radius: 6px; background: var(--line); margin: 10px 0; animation: radar-pulse 1.2s ease-in-out infinite; }
 @keyframes radar-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+.ok-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 4px 0 6px; }
+.ok-head p { margin: 0; }
+.radar-h { font-size: 14px; margin: 16px 0 8px; display: flex; align-items: center; gap: 8px; }
+.dist-row { margin: 8px 0; font-size: 14px; }
+.dist-top { display: flex; justify-content: space-between; gap: 12px; }
+.dist-bar { height: 8px; border-radius: 4px; background: var(--line); margin-top: 4px; overflow: hidden; }
+.dist-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.notes { margin: 8px 0; padding-left: 20px; font-size: 14px; display: grid; gap: 8px; }
+.holders { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
+.holder-row { display: flex; align-items: center; gap: 8px; font-size: 14px; flex-wrap: wrap; }
+.holder-bal { margin-left: auto; white-space: nowrap; }
